@@ -1,0 +1,11 @@
+.context
+.env
+.env.*
+.git
+.gitignore
+node_modules
+dist
+build
+out
+coverage
+*.log

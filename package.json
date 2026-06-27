@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run src/index.ts",
+    "start": "bun run src/index.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
@@ -14,5 +15,8 @@
     "@biomejs/biome": "^2.4.13",
     "@types/bun": "^1.1.8",
     "typescript": "^5.5.2"
+  },
+  "dependencies": {
+    "@google/genai": "^2.9.0"
   }
 }
