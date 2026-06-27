@@ -1,6 +1,10 @@
-# Saskatoon AI
+# Starflow
 
-Cloud Run-ready Bun + TypeScript webapp with a server-side Gemini integration.
+Starflow is a spark-to-step operating system for life. It helps ADHD users turn any overwhelming spark into one kind, doable next step.
+
+A spark can be a creative idea, a life admin obligation, an emotional overwhelm, a recurring habit, an urgent task, or a long-term dream. Starflow uses Gemini to understand the shape of the spark, ask only for the context it needs, and suggest the first action that feels possible right now.
+
+For this hackathon, we are demoing Starflow through app-building because it is a clear example of a big, exciting, overwhelming spark. The same loop is designed to work across life admin, creative projects, health routines, relationships, school, work, and home care.
 
 ## Stack
 
