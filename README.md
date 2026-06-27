@@ -52,6 +52,32 @@ bun run dev
 
 Open `http://localhost:3000`.
 
+## Local Postgres
+
+For agent context storage, local development uses Postgres 16 with `pgvector` in Docker:
+
+```bash
+bun run db:up
+bun run db:migrate
+```
+
+Or start Postgres, apply migrations, and run the app in one command:
+
+```bash
+bun run dev:local
+```
+
+`dev:local` uses the Conductor-allocated `PORT` when available and stops the
+local Postgres service when you press Ctrl-C.
+
+The local scripts derive a worktree-specific Postgres port, so parallel Conductor workspaces do not all bind to `5432`. To inspect the generated values:
+
+```bash
+./scripts/local-env.sh env
+```
+
+The initial schema covers users, Google OAuth accounts, agent sessions/messages, memories, and `vector(768)` memory embeddings. Drizzle schema lives in `src/db/schema.ts`; the bootstrap SQL migration lives in `db/migrations/`.
+
 ## Google Cloud Bootstrap
 
 For Cloud Run with Gemini Enterprise Agent Platform:

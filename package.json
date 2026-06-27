@@ -4,19 +4,30 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "dev:local": "./scripts/dev-local.sh",
     "start": "bun run src/index.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "db:up": "./scripts/dev-db.sh up -d postgres",
+    "db:down": "./scripts/dev-db.sh down",
+    "db:logs": "./scripts/dev-db.sh logs -f postgres",
+    "db:migrate": "./scripts/db-migrate.sh",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
     "@types/bun": "^1.1.8",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^5.5.2"
   },
   "dependencies": {
-    "@google/genai": "^2.9.0"
+    "@google/genai": "^2.9.0",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.9"
   }
 }
