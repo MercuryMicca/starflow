@@ -23,7 +23,20 @@ Create local environment variables:
 cp .env.example .env
 ```
 
-For the fastest local demo, set `GEMINI_API_KEY` from Google AI Studio. For Google Cloud mode, authenticate with ADC and set:
+For the fastest local demo, set `GEMINI_API_KEY` from Google AI Studio.
+
+If you received Google hackathon / Agent Platform variables, put them in `.env`:
+
+```bash
+GOOGLE_AGENT_PLATFORM_KEY=your-agent-platform-key
+GOOGLE_CLOUD_PROJECT=your-project-id
+GEMINI_PROJECT_NUMBER=your-project-number
+GEMINI_API_KEY=your-gemini-api-key
+```
+
+When `GOOGLE_AGENT_PLATFORM_KEY` is present, the app uses Gemini Enterprise Agent Platform mode. `GEMINI_API_KEY` remains useful as the local Developer API fallback if the Agent Platform key is removed.
+
+For Google Cloud mode with Application Default Credentials or a Cloud Run service account, omit `GOOGLE_AGENT_PLATFORM_KEY`, authenticate with ADC, and set:
 
 ```bash
 GOOGLE_GENAI_USE_ENTERPRISE=true
@@ -47,9 +60,18 @@ For Cloud Run with Gemini Enterprise Agent Platform:
 2. Enable billing.
 3. Enable the Agent Platform / Vertex AI API.
 4. Grant the Cloud Run service account permission to call Gemini, such as `roles/aiplatform.user`.
-5. Deploy with the environment variables below.
+5. Deploy with either the Agent Platform key or service account variables below.
 
-Recommended runtime variables:
+Agent Platform key runtime variables:
+
+```bash
+GOOGLE_AGENT_PLATFORM_KEY=your-agent-platform-key
+GOOGLE_CLOUD_PROJECT=your-project-id
+GEMINI_PROJECT_NUMBER=your-project-number
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+Service account / ADC runtime variables:
 
 ```bash
 GOOGLE_GENAI_USE_ENTERPRISE=true
@@ -69,7 +91,7 @@ gcloud run deploy saskatoon-ai \
   --source . \
   --region us-central1 \
   --allow-unauthenticated \
-  --set-env-vars GOOGLE_GENAI_USE_ENTERPRISE=true,GOOGLE_CLOUD_PROJECT=your-project-id,GOOGLE_CLOUD_LOCATION=global
+  --set-env-vars GOOGLE_AGENT_PLATFORM_KEY=your-agent-platform-key,GOOGLE_CLOUD_PROJECT=your-project-id,GEMINI_PROJECT_NUMBER=your-project-number
 ```
 
 Or build the included container:
@@ -80,7 +102,7 @@ gcloud run deploy saskatoon-ai \
   --image us-central1-docker.pkg.dev/PROJECT_ID/saskatoon/saskatoon-ai \
   --region us-central1 \
   --allow-unauthenticated \
-  --set-env-vars GOOGLE_GENAI_USE_ENTERPRISE=true,GOOGLE_CLOUD_PROJECT=PROJECT_ID,GOOGLE_CLOUD_LOCATION=global
+  --set-env-vars GOOGLE_AGENT_PLATFORM_KEY=your-agent-platform-key,GOOGLE_CLOUD_PROJECT=PROJECT_ID,GEMINI_PROJECT_NUMBER=your-project-number
 ```
 
 ## Checks

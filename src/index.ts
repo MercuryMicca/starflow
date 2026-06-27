@@ -8,6 +8,16 @@ type GenerateRequest = {
 };
 
 type JsonBody = Record<string, unknown>;
+type ProviderMode = "gemini-enterprise-agent-platform" | "gemini-developer-api";
+
+type GeminiConfig = {
+  provider: ProviderMode;
+  credentialSource: string;
+  apiKey: string | undefined;
+  project: string | undefined;
+  projectNumber: string | undefined;
+  location: string;
+};
 
 const systemInstruction = [
   "You are the AI backend for a Google Cloud hackathon webapp.",
@@ -26,6 +36,71 @@ function envFlag(name: string): boolean {
 
 function modelName(): string {
   return envValue("GEMINI_MODEL") ?? DEFAULT_MODEL;
+}
+
+function developerApiKey(): string | undefined {
+  return envValue("GEMINI_API_KEY") ?? envValue("GOOGLE_API_KEY");
+}
+
+function enterpriseApiKey(): string | undefined {
+  return envValue("GOOGLE_AGENT_PLATFORM_KEY");
+}
+
+function shouldUseEnterprise(): boolean {
+  if (envFlag("GOOGLE_GENAI_USE_ENTERPRISE")) {
+    return true;
+  }
+
+  if (enterpriseApiKey()) {
+    return true;
+  }
+
+  return Boolean(envValue("GOOGLE_CLOUD_PROJECT") && !developerApiKey());
+}
+
+function geminiConfig(): GeminiConfig {
+  const project = envValue("GOOGLE_CLOUD_PROJECT");
+  const projectNumber = envValue("GEMINI_PROJECT_NUMBER");
+  const location = envValue("GOOGLE_CLOUD_LOCATION") ?? "global";
+
+  if (shouldUseEnterprise()) {
+    const apiKey = enterpriseApiKey();
+
+    if (apiKey) {
+      return {
+        provider: "gemini-enterprise-agent-platform",
+        credentialSource: "GOOGLE_AGENT_PLATFORM_KEY",
+        apiKey,
+        project,
+        projectNumber,
+        location,
+      };
+    }
+
+    return {
+      provider: "gemini-enterprise-agent-platform",
+      credentialSource: "application-default-credentials",
+      apiKey: undefined,
+      project,
+      projectNumber,
+      location,
+    };
+  }
+
+  const apiKey = developerApiKey();
+
+  return {
+    provider: "gemini-developer-api",
+    credentialSource: apiKey
+      ? envValue("GEMINI_API_KEY")
+        ? "GEMINI_API_KEY"
+        : "GOOGLE_API_KEY"
+      : "not-configured",
+    apiKey,
+    project,
+    projectNumber,
+    location,
+  };
 }
 
 function parsePort(rawPort: string | undefined): number {
@@ -56,44 +131,53 @@ function logServerError(message: string, error: unknown): void {
 }
 
 function configuredProvider(): string {
-  if (envFlag("GOOGLE_GENAI_USE_ENTERPRISE")) {
-    return "gemini-enterprise-agent-platform";
-  }
-
-  return "gemini-developer-api";
+  return geminiConfig().provider;
 }
 
 function hasUsableCredentials(): boolean {
-  if (envFlag("GOOGLE_GENAI_USE_ENTERPRISE")) {
-    return Boolean(envValue("GOOGLE_CLOUD_PROJECT"));
+  const config = geminiConfig();
+  return configHasUsableCredentials(config);
+}
+
+function configHasUsableCredentials(config: GeminiConfig): boolean {
+  if (config.provider === "gemini-enterprise-agent-platform") {
+    return Boolean(config.apiKey ?? config.project);
   }
 
-  return Boolean(envValue("GEMINI_API_KEY") ?? envValue("GOOGLE_API_KEY"));
+  return Boolean(config.apiKey);
 }
 
 function createClient(): GoogleGenAI {
-  if (envFlag("GOOGLE_GENAI_USE_ENTERPRISE")) {
-    const project = envValue("GOOGLE_CLOUD_PROJECT");
+  const config = geminiConfig();
 
-    if (!project) {
-      throw new Error("GOOGLE_CLOUD_PROJECT is required when GOOGLE_GENAI_USE_ENTERPRISE=true.");
+  if (config.provider === "gemini-enterprise-agent-platform") {
+    if (config.apiKey) {
+      return new GoogleGenAI({
+        enterprise: true,
+        apiKey: config.apiKey,
+        apiVersion: "v1",
+      });
+    }
+
+    if (!config.project) {
+      throw new Error(
+        "Set GOOGLE_AGENT_PLATFORM_KEY, or set GOOGLE_CLOUD_PROJECT for Application Default Credentials.",
+      );
     }
 
     return new GoogleGenAI({
       enterprise: true,
-      project,
-      location: envValue("GOOGLE_CLOUD_LOCATION") ?? "global",
+      project: config.project,
+      location: config.location,
       apiVersion: "v1",
     });
   }
 
-  const apiKey = envValue("GEMINI_API_KEY") ?? envValue("GOOGLE_API_KEY");
-
-  if (!apiKey) {
-    throw new Error("Set GEMINI_API_KEY or GOOGLE_API_KEY for local Gemini Developer API use.");
+  if (!config.apiKey) {
+    throw new Error("Set GEMINI_API_KEY or GOOGLE_API_KEY for Gemini Developer API use.");
   }
 
-  return new GoogleGenAI({ apiKey });
+  return new GoogleGenAI({ apiKey: config.apiKey });
 }
 
 function json(status: number, body: JsonBody): Response {
@@ -161,7 +245,7 @@ async function handleGenerate(request: Request): Promise<Response> {
   if (!hasUsableCredentials()) {
     return json(503, {
       error:
-        "Gemini is not configured. Set GEMINI_API_KEY locally or GOOGLE_GENAI_USE_ENTERPRISE=true with GOOGLE_CLOUD_PROJECT on Google Cloud.",
+        "Gemini is not configured. Set GEMINI_API_KEY for Developer API mode, or GOOGLE_AGENT_PLATFORM_KEY / GOOGLE_CLOUD_PROJECT for Agent Platform mode.",
     });
   }
 
@@ -188,10 +272,17 @@ function handleRequest(request: Request): Promise<Response> | Response {
   }
 
   if (request.method === "GET" && url.pathname === "/healthz") {
+    const config = geminiConfig();
+    const geminiConfigured = configHasUsableCredentials(config);
+
     return json(200, {
       ok: true,
-      provider: configuredProvider(),
-      geminiConfigured: hasUsableCredentials(),
+      provider: config.provider,
+      credentialSource: geminiConfigured ? config.credentialSource : "not-configured",
+      geminiConfigured,
+      cloudProjectConfigured: Boolean(config.project),
+      projectNumberConfigured: Boolean(config.projectNumber),
+      location: config.location,
     });
   }
 
@@ -210,8 +301,12 @@ Bun.serve({
   fetch: handleRequest,
 });
 
+const startupConfig = geminiConfig();
+
 // biome-ignore lint/suspicious/noConsole: Startup logging is useful in Cloud Run logs.
-console.log(`Saskatoon webapp listening on http://0.0.0.0:${port}`);
+console.log(
+  `Saskatoon webapp listening on http://0.0.0.0:${port} (${startupConfig.provider}, ${startupConfig.credentialSource})`,
+);
 
 const pageHtml = `<!doctype html>
 <html lang="en">
