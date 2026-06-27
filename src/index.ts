@@ -12,9 +12,9 @@ import { OAuth2Client } from "google-auth-library";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { db } from "./db/client";
-import { appUsers, brainDumps, reflections, taskSteps, tasks } from "./db/schema";
+import { agentMemories, appUsers, brainDumps, reflections, taskSteps, tasks } from "./db/schema";
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-3.5-flash";
 const MAX_PROMPT_LENGTH = 8_000;
 const SESSION_COOKIE = "starflow_session";
 const DEMO_EMAIL_DOMAIN = "starflow.local";
@@ -377,7 +377,13 @@ function contentTypeFor(pathname: string): string {
 }
 
 async function serveFrontend(pathname: string): Promise<Response> {
-  const safePathname = decodeURIComponent(pathname);
+  let safePathname: string;
+
+  try {
+    safePathname = decodeURIComponent(pathname);
+  } catch {
+    return Response.json({ error: "Invalid path." }, { status: 400 });
+  }
 
   if (safePathname.includes("..")) {
     return Response.json({ error: "Invalid path." }, { status: 400 });

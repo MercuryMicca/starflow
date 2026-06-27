@@ -120,7 +120,7 @@ Agent Platform key runtime variables:
 GOOGLE_AGENT_PLATFORM_KEY=your-agent-platform-key
 GOOGLE_CLOUD_PROJECT=your-project-id
 GEMINI_PROJECT_NUMBER=your-project-number
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.5-flash
 ```
 
 Service account / ADC runtime variables:
@@ -129,7 +129,7 @@ Service account / ADC runtime variables:
 GOOGLE_GENAI_USE_ENTERPRISE=true
 GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_CLOUD_LOCATION=global
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.5-flash
 ```
 
 ## Deploy
@@ -139,7 +139,7 @@ The examples below use `--allow-unauthenticated` for fast public hackathon demos
 Cloud Run also needs database and session configuration. Prefer Secret Manager for `DATABASE_URL`, `SESSION_SECRET`, and any API keys:
 
 ```bash
-gcloud run deploy saskatoon-ai \
+gcloud run deploy starflow \
   --source . \
   --region us-central1 \
   --allow-unauthenticated \
@@ -158,7 +158,7 @@ The local `bun run db:migrate` command starts the Docker Compose Postgres servic
 Build and deploy from source with Google Cloud Buildpacks:
 
 ```bash
-gcloud run deploy saskatoon-ai \
+gcloud run deploy starflow \
   --source . \
   --region us-central1 \
   --allow-unauthenticated \
@@ -168,9 +168,9 @@ gcloud run deploy saskatoon-ai \
 Or build the included container:
 
 ```bash
-gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT_ID/saskatoon/saskatoon-ai
-gcloud run deploy saskatoon-ai \
-  --image us-central1-docker.pkg.dev/PROJECT_ID/saskatoon/saskatoon-ai \
+gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT_ID/starflow/starflow
+gcloud run deploy starflow \
+  --image us-central1-docker.pkg.dev/PROJECT_ID/starflow/starflow \
   --region us-central1 \
   --allow-unauthenticated \
   --set-env-vars GOOGLE_AGENT_PLATFORM_KEY=your-agent-platform-key,GOOGLE_CLOUD_PROJECT=PROJECT_ID,GEMINI_PROJECT_NUMBER=your-project-number,DATABASE_URL=postgresql://user:password@host:5432/database,SESSION_SECRET=replace-with-random-secret

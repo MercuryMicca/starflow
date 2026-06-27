@@ -112,7 +112,7 @@ default_app_port() {
     return 0
   fi
 
-  echo 3000
+  echo 5173
 }
 
 load_dotenv() {

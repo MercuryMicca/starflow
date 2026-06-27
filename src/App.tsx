@@ -356,7 +356,7 @@ export function App() {
               error={triageMutation.error?.message}
               loading={triageMutation.isPending}
               line={supportLine}
-              model={configQuery.data?.model ?? "gemini-2.5-flash"}
+              model={configQuery.data?.model ?? "gemini-3.5-flash"}
               user={user}
               onChange={setDumpText}
               onSubmit={() => triageMutation.mutate(dumpText)}
