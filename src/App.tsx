@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   Bot,
+  Camera,
   Check,
   CheckCircle2,
   Compass,
@@ -60,6 +61,8 @@ type ReflectionState = {
   } | null;
 };
 
+type ReflectionEntry = NonNullable<ReflectionState["latest"]>;
+
 type MemoryState = {
   count: number;
   latest: {
@@ -67,6 +70,26 @@ type MemoryState = {
     content: string;
     createdAt: string;
   } | null;
+};
+
+type CategorizedMemory = {
+  id: string;
+  content: string;
+  createdAt: string;
+};
+
+type MemoryCategory = {
+  name: string;
+  summary: string;
+  memories: CategorizedMemory[];
+};
+
+type DailyReport = {
+  headline: string;
+  encouragement: string;
+  observations: string[];
+  threads: Array<{ label: string; detail: string }>;
+  carryForward: string;
 };
 
 type AppState = {
@@ -81,7 +104,8 @@ type Config = {
   model: string;
 };
 
-type Screen = "landing" | "signin" | "capture" | "focus" | "reflect";
+type Screen = "landing" | "signin" | "capture" | "focus" | "reflect" | "thoughts";
+type ChatAgent = "landing" | "signin" | "capture" | "focus" | "reflect";
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -152,6 +176,17 @@ const featureCards = [
   },
 ];
 
+function localDayWindow() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+  };
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const [screen, setScreen] = useState<Screen>(() =>
@@ -194,6 +229,31 @@ export function App() {
   const user = meQuery.data?.user ?? null;
   const task = stateQuery.data?.task ?? null;
   const memory = stateQuery.data?.memory ?? { count: 0, latest: null };
+  const todayWindow = useMemo(() => localDayWindow(), []);
+  const categorizedMemoriesQuery = useQuery({
+    queryKey: ["memories", "categorized", user?.id],
+    enabled: Boolean(user && screen === "thoughts"),
+    queryFn: () =>
+      api<{
+        total: number;
+        categories: MemoryCategory[];
+        usedModel: boolean;
+        model: string | null;
+      }>("/api/memories/categorized"),
+  });
+  const dailyReportQuery = useQuery({
+    queryKey: ["reflect", "report", user?.id, todayWindow.start],
+    enabled: Boolean(user && screen === "reflect"),
+    queryFn: () =>
+      api<{ report: DailyReport; usedModel: boolean; example: boolean }>(
+        `/api/reflect/report?since=${encodeURIComponent(todayWindow.start)}&until=${encodeURIComponent(todayWindow.end)}`,
+      ),
+  });
+  const reflectionHistoryQuery = useQuery({
+    queryKey: ["reflections", user?.id],
+    enabled: Boolean(user && screen === "reflect"),
+    queryFn: () => api<{ reflections: ReflectionEntry[] }>("/api/reflections"),
+  });
 
   useEffect(() => {
     const onPopState = () => {
@@ -270,7 +330,28 @@ export function App() {
         task: current?.task ?? null,
         memory: data.memoryState,
       }));
+      queryClient.invalidateQueries({ queryKey: ["memories", "categorized"] });
       setDumpText("");
+    },
+  });
+
+  const photoMutation = useMutation({
+    mutationFn: (imageDataUrl: string) =>
+      api<{
+        memory: MemoryState["latest"];
+        memoryState: MemoryState;
+        note: string;
+      }>("/api/capture/photo", {
+        method: "POST",
+        body: JSON.stringify({ imageDataUrl }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData<AppState | undefined>(["state"], (current) => ({
+        reflection: current?.reflection ?? { count: 0, latest: null },
+        task: current?.task ?? null,
+        memory: data.memoryState,
+      }));
+      queryClient.invalidateQueries({ queryKey: ["memories", "categorized"] });
     },
   });
 
@@ -298,14 +379,17 @@ export function App() {
         method: "POST",
         body: JSON.stringify({
           answers: {
-            tried: reflectionAnswers.tried,
-            hard: reflectionAnswers.hard,
+            tried: reflectionAnswers.proud ? "Reviewed the daily map" : "",
+            hard: "",
             proud: reflectionAnswers.proud,
           },
           carryForward: reflectionAnswers.carry,
         }),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      queryClient.invalidateQueries({ queryKey: ["reflections"] });
+    },
   });
 
   const toggleStepMutation = useMutation({
@@ -340,7 +424,8 @@ export function App() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
 
-  const currentAgent: Screen = task && screen === "focus" ? "focus" : screen;
+  const currentAgent: ChatAgent =
+    screen === "thoughts" ? "capture" : task && screen === "focus" ? "focus" : screen;
   const handleScreen = (nextScreen: Screen) => {
     if (nextScreen === "focus") {
       setScreen("focus");
@@ -373,20 +458,23 @@ export function App() {
       ) : (
         <section
           id="app"
-          className="mx-auto min-h-[calc(100svh-64px)] w-[min(1120px,calc(100vw-24px))] pt-5 pb-44 md:w-[min(1120px,calc(100vw-32px))] md:py-20"
+          className="mx-auto min-h-[calc(100svh-64px)] w-[min(1120px,calc(100vw-24px))] pt-5 pb-44 md:w-[min(1120px,calc(100vw-32px))] md:py-10"
         >
-          <div className="mx-auto mb-6 hidden max-w-[720px] text-center md:block">
-            <h2 className="font-serif text-4xl text-indigo-soft md:text-5xl">Try the loop now.</h2>
-            <p className="mt-4 text-mist">
-              Move between Scatter, Flow, and Reflect without losing your place.
-            </p>
-          </div>
+          {!user ? (
+            <div className="mx-auto mb-6 hidden max-w-[720px] text-center md:block">
+              <h2 className="font-serif text-4xl text-indigo-soft md:text-5xl">
+                Try the loop now.
+              </h2>
+              <p className="mt-4 text-mist">
+                Move between Scatter, Flow, and Reflect without losing your place.
+              </p>
+            </div>
+          ) : null}
 
           {user ? (
             <DesktopModeSwitcher
               memoryCount={memory.count}
               screen={screen}
-              task={task}
               onScreen={handleScreen}
             />
           ) : null}
@@ -405,21 +493,38 @@ export function App() {
           {user && screen === "capture" ? (
             <CapturePanel
               dumpText={dumpText}
-              error={memoryMutation.error?.message}
+              error={memoryMutation.error?.message ?? photoMutation.error?.message}
               line={supportLine}
               loading={memoryMutation.isPending}
               memory={memory}
               model={configQuery.data?.model ?? "gemini-3.5-flash"}
+              photoLoading={photoMutation.isPending}
               user={user}
               onChange={setDumpText}
+              onPhotoCapture={(imageDataUrl) => photoMutation.mutate(imageDataUrl)}
               onSubmit={() => memoryMutation.mutate(dumpText)}
+              onViewThoughts={() => setScreen("thoughts")}
               onLogout={() => logoutMutation.mutate()}
+            />
+          ) : null}
+
+          {user && screen === "thoughts" ? (
+            <ThoughtsPanel
+              categories={categorizedMemoriesQuery.data?.categories ?? []}
+              error={categorizedMemoriesQuery.error?.message}
+              loading={categorizedMemoriesQuery.isLoading}
+              total={categorizedMemoriesQuery.data?.total ?? 0}
+              usedModel={categorizedMemoriesQuery.data?.usedModel ?? false}
+              onBack={() => setScreen("capture")}
+              onStartThought={(content) => triageMutation.mutate(content)}
+              startingFlow={triageMutation.isPending}
             />
           ) : null}
 
           {user && screen === "focus" && task ? (
             <FocusPanel
               task={task}
+              onChooseThought={() => setScreen("thoughts")}
               onReflect={() => setScreen("reflect")}
               user={user}
               onNewDump={() => setScreen("capture")}
@@ -448,6 +553,9 @@ export function App() {
               answers={reflectionAnswers}
               error={reflectionMutation.error?.message}
               latest={stateQuery.data?.reflection.latest ?? null}
+              report={dailyReportQuery.data?.report ?? null}
+              reportLoading={dailyReportQuery.isLoading}
+              history={reflectionHistoryQuery.data?.reflections ?? []}
               loading={reflectionMutation.isPending}
               reflectionCount={stateQuery.data?.reflection.count ?? 0}
               user={user}
@@ -718,7 +826,10 @@ function CapturePanel({
   model,
   onChange,
   onLogout,
+  onPhotoCapture,
   onSubmit,
+  onViewThoughts,
+  photoLoading,
   user,
 }: {
   dumpText: string;
@@ -729,14 +840,32 @@ function CapturePanel({
   model: string;
   onChange: (value: string) => void;
   onLogout: () => void;
+  onPhotoCapture: (imageDataUrl: string) => void;
   onSubmit: () => void;
+  onViewThoughts: () => void;
+  photoLoading: boolean;
   user: User;
 }) {
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     textareaRef.current?.focus();
   }, []);
+
+  const handlePhotoFile = (file: File | undefined) => {
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        onPhotoCapture(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   return (
     <div className="mx-auto max-w-[430px] md:max-w-[900px]">
@@ -797,7 +926,7 @@ function CapturePanel({
         <div className="relative">
           <textarea
             ref={textareaRef}
-            className="min-h-44 w-full resize-y rounded-[1.35rem] border border-white/10 bg-white/5 p-4 pr-12 text-starlight outline-none transition focus:border-indigo-soft focus:shadow-[0_0_20px_rgba(190,194,255,0.18)] md:min-h-32 md:rounded-[1.5rem] md:p-5 md:pr-14"
+            className="min-h-44 w-full resize-y rounded-[1.35rem] border border-white/10 bg-white/5 p-4 text-starlight outline-none transition focus:border-indigo-soft focus:shadow-[0_0_20px_rgba(190,194,255,0.18)] md:min-h-32 md:rounded-[1.5rem] md:p-5"
             maxLength={8000}
             placeholder="Type a spark of thought..."
             value={dumpText}
@@ -808,11 +937,41 @@ function CapturePanel({
               }
             }}
           />
-          <Mic className="absolute right-4 top-4 text-dim md:right-5 md:top-5" size={22} />
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <span className="text-dim text-sm">{dumpText.length} / 8000</span>
           <span className="text-dim text-xs">{model}</span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <input
+            ref={photoInputRef}
+            type="file"
+            className="hidden"
+            accept="image/png,image/jpeg,image/webp"
+            capture="environment"
+            onChange={(event) => {
+              handlePhotoFile(event.currentTarget.files?.[0]);
+              event.currentTarget.value = "";
+            }}
+          />
+          <button
+            type="button"
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-3 font-bold text-dim text-sm"
+            disabled
+            title="Voice capture is a demo placeholder."
+          >
+            <Mic size={17} />
+            Voice
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-indigo-soft/25 bg-indigo-soft/10 px-4 py-3 font-bold text-indigo-soft text-sm disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={photoLoading}
+            onClick={() => photoInputRef.current?.click()}
+          >
+            <Camera size={17} />
+            {photoLoading ? "Reading..." : "Photo"}
+          </button>
         </div>
         <button
           type="button"
@@ -824,12 +983,131 @@ function CapturePanel({
           {loading ? "Saving..." : "Save to memory"}
         </button>
         {memory.latest ? (
-          <p className="mt-3 text-center text-dim text-sm">
-            {memory.count} thought{memory.count === 1 ? "" : "s"} remembered. Open Flow to triage
-            the latest one.
-          </p>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-center text-sm">
+            <span className="text-dim">
+              {memory.count} thought{memory.count === 1 ? "" : "s"} remembered.
+            </span>
+            <button
+              type="button"
+              className="font-bold text-indigo-soft hover:text-starlight"
+              onClick={onViewThoughts}
+            >
+              View categorized thoughts
+            </button>
+          </div>
         ) : null}
         {error ? <p className="mt-4 text-red-200 text-sm">{error}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function ThoughtsPanel({
+  categories,
+  error,
+  loading,
+  onBack,
+  onStartThought,
+  startingFlow,
+  total,
+  usedModel,
+}: {
+  categories: MemoryCategory[];
+  error: string | undefined;
+  loading: boolean;
+  onBack: () => void;
+  onStartThought: (content: string) => void;
+  startingFlow: boolean;
+  total: number;
+  usedModel: boolean;
+}) {
+  return (
+    <div className="mx-auto max-w-[900px]">
+      <div className="glass rounded-[2rem] p-5 md:p-8">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-white/10 border-b pb-4">
+          <div className="flex items-center gap-3">
+            <div className="grid size-10 place-items-center rounded-full border border-indigo-soft/40 bg-indigo-soft/10 text-indigo-soft">
+              <Sparkles size={18} />
+            </div>
+            <div>
+              <p className="font-bold">Scatter thoughts</p>
+              <p className="text-dim text-xs">
+                {usedModel ? "Categorized by Gemini" : "Grouped locally"}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="rounded-full border border-white/10 px-4 py-2 text-dim text-sm"
+            onClick={onBack}
+          >
+            Back to Scatter
+          </button>
+        </div>
+
+        <div className="mt-7">
+          <p className="font-bold text-indigo-soft text-sm uppercase tracking-[0.18em]">
+            Thought map
+          </p>
+          <h3 className="mt-3 font-serif text-4xl text-starlight leading-tight md:text-5xl">
+            What you have been carrying.
+          </h3>
+          <p className="mt-4 text-mist leading-7">
+            {total > 0
+              ? `${total} saved Scatter thought${total === 1 ? "" : "s"}, grouped into patterns.`
+              : "Save a Scatter thought first, then this page will organize it into patterns."}
+          </p>
+        </div>
+
+        {loading ? <p className="mt-8 text-mist">Categorizing your thoughts...</p> : null}
+        {error ? <p className="mt-6 text-red-200 text-sm">{error}</p> : null}
+
+        {!loading && categories.length > 0 ? (
+          <div className="mt-8 grid gap-4 md:grid-cols-2">
+            {categories.map((category) => (
+              <section
+                className="rounded-[1.5rem] border border-white/10 bg-white/5 p-5"
+                key={category.name}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="font-serif text-2xl text-starlight">{category.name}</h4>
+                    <p className="mt-2 text-dim text-sm leading-6">{category.summary}</p>
+                  </div>
+                  <span className="rounded-full bg-indigo-soft/15 px-3 py-1 text-indigo-soft text-xs">
+                    {category.memories.length}
+                  </span>
+                </div>
+                <div className="mt-4 grid gap-3">
+                  {category.memories.map((memory) => (
+                    <article
+                      className="rounded-[1rem] border border-white/10 bg-night/60 p-3"
+                      key={memory.id}
+                    >
+                      <p className="text-mist text-sm leading-6">{memory.content}</p>
+                      <button
+                        type="button"
+                        className="mt-3 inline-flex items-center gap-2 rounded-full border border-indigo-soft/30 bg-indigo-soft/10 px-3 py-1.5 font-bold text-indigo-soft text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={startingFlow}
+                        onClick={() => onStartThought(memory.content)}
+                      >
+                        <ArrowRight size={13} />
+                        {startingFlow ? "Starting..." : "Start Flow"}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        ) : null}
+
+        {!loading && categories.length === 0 ? (
+          <div className="mt-8 rounded-[1.5rem] border border-white/10 bg-white/5 p-5 text-mist">
+            Nothing saved yet. Scatter is the place to drop thoughts before they need to become
+            action.
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -919,6 +1197,7 @@ function FlowStartPanel({
 }
 
 function FocusPanel({
+  onChooseThought,
   onLogout,
   onNewDump,
   onReflect,
@@ -926,6 +1205,7 @@ function FocusPanel({
   task,
   user,
 }: {
+  onChooseThought: () => void;
   onLogout: () => void;
   onNewDump: () => void;
   onReflect: () => void;
@@ -969,6 +1249,24 @@ function FocusPanel({
             aria-label="New dump"
           >
             <MoreVertical size={18} />
+          </button>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="inline-flex items-center gap-2 rounded-full border border-indigo-soft/25 bg-indigo-soft/10 px-3 py-1.5 font-bold text-indigo-soft text-xs"
+            onClick={onChooseThought}
+          >
+            <Sparkles size={13} />
+            Choose another thought
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 font-bold text-dim text-xs"
+            onClick={onNewDump}
+          >
+            <Zap size={13} />
+            New Scatter
           </button>
         </div>
       </div>
@@ -1049,16 +1347,20 @@ function FocusPanel({
 function ReflectPanel({
   answers,
   error,
+  history,
   latest,
   loading,
   onAnswers,
   onLogout,
   onSubmit,
+  report,
+  reportLoading,
   reflectionCount,
   user,
 }: {
   answers: { tried: string; hard: string; proud: string; carry: string };
   error: string | undefined;
+  history: ReflectionEntry[];
   latest: ReflectionState["latest"];
   loading: boolean;
   onAnswers: Dispatch<
@@ -1066,12 +1368,46 @@ function ReflectPanel({
   >;
   onLogout: () => void;
   onSubmit: () => void;
+  report: DailyReport | null;
+  reportLoading: boolean;
   reflectionCount: number;
   user: User;
 }) {
-  const answered = [answers.tried, answers.hard, answers.proud].filter(
-    (answer) => answer.trim().length > 0,
-  ).length;
+  const reflectionSignals = ["I showed up", "I made something visible", "I came back gently"];
+  const carryChoices = ["Showing up counts", "Quiet Focus", "Self-Kindness", "One next step"];
+  const historyByDay = useMemo(() => {
+    const groups = new Map<string, ReflectionEntry[]>();
+
+    for (const reflection of history) {
+      const day = new Date(reflection.createdAt).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        weekday: "short",
+      });
+      groups.set(day, [...(groups.get(day) ?? []), reflection]);
+    }
+
+    return [...groups.entries()];
+  }, [history]);
+  const activeReport =
+    report ??
+    ({
+      headline: "You showed up today.",
+      encouragement:
+        "You did great. Even opening this page counts as returning to yourself with care.",
+      observations: [
+        "Scatter gives your thoughts somewhere to land.",
+        "Flow can turn one saved thought into a lighter next step.",
+        "Reflect is here to notice effort, not grade output.",
+      ],
+      threads: [
+        {
+          label: "Kind reframe",
+          detail: "You are not starting over; you are returning.",
+        },
+      ],
+      carryForward: "Showing up counts",
+    } satisfies DailyReport);
 
   return (
     <div className="mx-auto max-w-[760px]">
@@ -1082,56 +1418,75 @@ function ReflectPanel({
             Before you sleep
           </p>
           <h3 className="mt-3 font-serif text-4xl text-starlight leading-tight md:text-5xl">
-            Let the day settle.
+            {reportLoading ? "Mapping the day..." : activeReport.headline}
           </h3>
-          <p className="mt-4 text-mist leading-7">
-            Answer what feels easy. Every new attempt is a star added to your map.
-          </p>
+          <p className="mt-4 text-mist leading-7">{activeReport.encouragement}</p>
         </div>
 
         <div className="mt-8 grid gap-4">
-          <ReflectionPrompt
-            icon={<Compass size={20} />}
-            label="What did you try today?"
-            value={answers.tried}
-            onChange={(value) => onAnswers((current) => ({ ...current, tried: value }))}
-          />
-          <ReflectionPrompt
-            icon={<Bot size={20} />}
-            label="What felt hard?"
-            value={answers.hard}
-            onChange={(value) => onAnswers((current) => ({ ...current, hard: value }))}
-          />
-          <ReflectionPrompt
-            icon={<Stars size={20} />}
-            label="What are you proud of?"
-            value={answers.proud}
-            onChange={(value) => onAnswers((current) => ({ ...current, proud: value }))}
-          />
-          <div className="glass rounded-[1.75rem] p-5">
-            <div className="flex items-start gap-4">
-              <Moon className="mt-1 text-indigo-soft" size={20} />
-              <div className="min-w-0 flex-1">
-                <label className="font-serif text-2xl text-starlight" htmlFor="carry-forward">
-                  What should carry into tomorrow?
-                </label>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {["Persistence", "Quiet Focus", "Self-Kindness"].map((chip) => (
-                    <button
-                      className={`rounded-full border px-4 py-2 text-sm ${
-                        answers.carry === chip
-                          ? "border-indigo-soft bg-indigo-soft/20 text-indigo-soft"
-                          : "border-white/10 bg-white/5 text-mist"
-                      }`}
-                      key={chip}
-                      type="button"
-                      onClick={() => onAnswers((current) => ({ ...current, carry: chip }))}
-                    >
-                      {chip}
-                    </button>
-                  ))}
-                </div>
+          <div className="rounded-[1.5rem] border border-gold-soft/20 bg-gold-soft/10 p-5">
+            <p className="font-bold text-gold-soft text-xs uppercase tracking-[0.16em]">
+              What I am noticing
+            </p>
+            <ul className="mt-4 grid gap-3 text-starlight leading-6">
+              {activeReport.observations.map((item) => (
+                <li className="flex gap-3" key={item}>
+                  <Stars className="mt-1 shrink-0 text-gold-soft" size={15} />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {activeReport.threads.map((thread) => (
+              <div
+                className="rounded-[1.25rem] border border-white/10 bg-white/5 p-4"
+                key={thread.label}
+              >
+                <p className="font-bold text-indigo-soft">{thread.label}</p>
+                <p className="mt-2 text-mist text-sm leading-6">{thread.detail}</p>
               </div>
+            ))}
+          </div>
+
+          <div className="glass rounded-[1.75rem] p-5">
+            <p className="font-serif text-2xl text-starlight">What should the day remember?</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {reflectionSignals.map((chip) => (
+                <button
+                  className={`rounded-full border px-4 py-2 text-sm ${
+                    answers.proud === chip
+                      ? "border-indigo-soft bg-indigo-soft/20 text-indigo-soft"
+                      : "border-white/10 bg-white/5 text-mist"
+                  }`}
+                  key={chip}
+                  type="button"
+                  onClick={() => onAnswers((current) => ({ ...current, proud: chip }))}
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="glass rounded-[1.75rem] p-5">
+            <p className="font-serif text-2xl text-starlight">Carry into tomorrow</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {carryChoices.map((chip) => (
+                <button
+                  className={`rounded-full border px-4 py-2 text-sm ${
+                    answers.carry === chip
+                      ? "border-indigo-soft bg-indigo-soft/20 text-indigo-soft"
+                      : "border-white/10 bg-white/5 text-mist"
+                  }`}
+                  key={chip}
+                  type="button"
+                  onClick={() => onAnswers((current) => ({ ...current, carry: chip }))}
+                >
+                  {chip}
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -1139,20 +1494,17 @@ function ReflectPanel({
         <div className="mt-7 flex flex-wrap items-center justify-between gap-4 border-white/10 border-t pt-6">
           <div>
             <p className="font-bold text-dim text-xs uppercase tracking-[0.18em]">
-              Your evening constellation
+              Guided reflection
             </p>
-            <p className="mt-2 text-mist">
-              {"★".repeat(Math.min(answered, 4))}
-              {"☆".repeat(Math.max(0, 4 - answered))} {answered} of 4 reflections gathered.
-            </p>
+            <p className="mt-2 text-mist">{reflectionCount} saved reflections.</p>
           </div>
           <button
             className="button-glow rounded-full bg-gradient-to-r from-indigo-deep to-indigo-soft/40 px-7 py-3 font-bold text-indigo-soft"
-            disabled={loading || answered === 0}
+            disabled={loading || reportLoading}
             type="button"
             onClick={onSubmit}
           >
-            {loading ? "Gathering..." : "Gather reflection"}
+            {loading ? "Saving..." : "Save reflection"}
           </button>
         </div>
 
@@ -1162,35 +1514,43 @@ function ReflectPanel({
             {latest.summary}
           </div>
         ) : null}
-        <p className="mt-4 text-dim text-sm">{reflectionCount} saved reflections.</p>
+
+        {historyByDay.length > 0 ? (
+          <div className="mt-7 border-white/10 border-t pt-6">
+            <p className="font-bold text-indigo-soft text-sm uppercase tracking-[0.18em]">
+              Reflection history
+            </p>
+            <div className="mt-4 grid gap-4">
+              {historyByDay.map(([day, entries]) => (
+                <section
+                  className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4"
+                  key={day}
+                >
+                  <p className="font-bold text-starlight">{day}</p>
+                  <div className="mt-3 grid gap-3">
+                    {entries.map((entry) => (
+                      <article
+                        className="rounded-[1rem] border border-white/10 bg-night/50 p-3 text-sm"
+                        key={entry.id}
+                      >
+                        {entry.summary ? (
+                          <p className="whitespace-pre-wrap text-mist leading-6">{entry.summary}</p>
+                        ) : null}
+                        {entry.carryForward ? (
+                          <p className="mt-2 font-bold text-gold-soft">
+                            Carry forward: {entry.carryForward}
+                          </p>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
-  );
-}
-
-function ReflectionPrompt({
-  icon,
-  label,
-  onChange,
-  value,
-}: {
-  icon: ReactNode;
-  label: string;
-  onChange: (value: string) => void;
-  value: string;
-}) {
-  return (
-    <label className="glass block rounded-[1.75rem] p-5">
-      <span className="flex items-center gap-3 font-serif text-2xl text-starlight">
-        <span className="text-indigo-soft">{icon}</span>
-        {label}
-      </span>
-      <textarea
-        className="mt-4 min-h-24 w-full resize-y rounded-[1.25rem] border border-white/10 bg-white/5 p-4 text-starlight outline-none transition focus:border-indigo-soft"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
   );
 }
 
@@ -1226,70 +1586,65 @@ function DesktopModeSwitcher({
   memoryCount,
   onScreen,
   screen,
-  task,
 }: {
   memoryCount: number;
   onScreen: (screen: Screen) => void;
   screen: Screen;
-  task: FocusTask | null;
 }) {
   const items: Array<{
     screen: Screen;
     label: string;
-    description: string;
     icon: ReactNode;
-    meta: string;
+    badge?: string;
   }> = [
     {
       screen: "capture",
       label: "Scatter",
-      description: "Save the thought",
-      icon: <Sparkles size={20} />,
-      meta: `${memoryCount} remembered`,
+      icon: <Sparkles size={16} />,
+      ...(memoryCount > 0 ? { badge: String(memoryCount) } : {}),
     },
     {
       screen: "focus",
       label: "Flow",
-      description: "Triage into steps",
-      icon: <CheckCircle2 size={20} />,
-      meta: task ? "Task active" : "Ready when saved",
+      icon: <CheckCircle2 size={16} />,
     },
     {
       screen: "reflect",
       label: "Reflect",
-      description: "Notice the pattern",
-      icon: <Moon size={20} />,
-      meta: "Daily signal",
+      icon: <Moon size={16} />,
     },
   ];
 
   return (
-    <nav className="mx-auto mb-8 hidden max-w-[880px] grid-cols-3 gap-3 md:grid">
+    <nav
+      className="mx-auto mb-5 hidden w-fit max-w-full items-center rounded-full border border-white/10 bg-night/80 p-1 shadow-xl backdrop-blur-xl md:flex"
+      aria-label="Starflow modes"
+    >
       {items.map((item) => {
         const active = screen === item.screen;
         return (
           <button
             type="button"
             key={item.screen}
-            className={`rounded-[1.25rem] border p-4 text-left transition ${
+            className={`inline-flex h-10 items-center gap-2 rounded-full px-4 font-bold text-sm transition ${
               active
-                ? "border-indigo-soft/50 bg-indigo-soft/15 shadow-[0_0_24px_rgba(190,194,255,0.12)]"
-                : "border-white/10 bg-white/5 hover:border-indigo-soft/30 hover:bg-white/8"
+                ? "bg-indigo-soft text-indigo-deep shadow-[0_0_18px_rgba(190,194,255,0.18)]"
+                : "text-dim hover:bg-white/5 hover:text-starlight"
             }`}
+            aria-pressed={active}
             onClick={() => onScreen(item.screen)}
           >
-            <span className="flex items-center justify-between gap-3">
+            {item.icon}
+            <span>{item.label}</span>
+            {item.badge ? (
               <span
-                className={`grid size-10 place-items-center rounded-full ${
-                  active ? "bg-indigo-soft text-indigo-deep" : "bg-indigo-soft/15 text-indigo-soft"
+                className={`grid min-w-5 place-items-center rounded-full px-1.5 text-[0.65rem] ${
+                  active ? "bg-indigo-deep/20 text-indigo-deep" : "bg-white/10 text-dim"
                 }`}
               >
-                {item.icon}
+                {item.badge}
               </span>
-              <span className="text-dim text-xs">{item.meta}</span>
-            </span>
-            <span className="mt-4 block font-bold text-starlight">{item.label}</span>
-            <span className="mt-1 block text-dim text-sm">{item.description}</span>
+            ) : null}
           </button>
         );
       })}
@@ -1342,7 +1697,7 @@ function AgentDrawer({
   task,
   user,
 }: {
-  agent: Screen;
+  agent: ChatAgent;
   chatOpen: boolean;
   dumpText: string;
   messages: ChatMessage[];
