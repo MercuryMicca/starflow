@@ -20,6 +20,21 @@ process_cwd() {
   lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
 }
 
+stop_same_worktree_port() {
+  port="$1"
+  root="$2"
+
+  if ! command -v lsof >/dev/null 2>&1; then
+    return 0
+  fi
+
+  for pid in $(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true); do
+    if [ "$(process_cwd "$pid")" = "$root" ]; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
 reclaim_same_worktree_port() {
   port="$1"
   root="$2"
@@ -72,6 +87,10 @@ cleanup() {
   fi
 
   ./scripts/dev-db.sh stop postgres >/dev/null 2>&1 || true
+  if [ -n "${root:-}" ]; then
+    stop_same_worktree_port "${VITE_PORT:-}" "$root"
+    stop_same_worktree_port "${PORT:-}" "$root"
+  fi
   if [ -n "$exit_file" ]; then
     rm -f "$exit_file"
   fi

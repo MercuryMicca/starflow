@@ -60,9 +60,19 @@ type ReflectionState = {
   } | null;
 };
 
+type MemoryState = {
+  count: number;
+  latest: {
+    id: string;
+    content: string;
+    createdAt: string;
+  } | null;
+};
+
 type AppState = {
   task: FocusTask | null;
   reflection: ReflectionState;
+  memory: MemoryState;
 };
 
 type Config = {
@@ -183,6 +193,7 @@ export function App() {
 
   const user = meQuery.data?.user ?? null;
   const task = stateQuery.data?.task ?? null;
+  const memory = stateQuery.data?.memory ?? { count: 0, latest: null };
 
   useEffect(() => {
     const onPopState = () => {
@@ -237,9 +248,29 @@ export function App() {
   const logoutMutation = useMutation({
     mutationFn: () => api<{ ok: boolean }>("/api/logout", { method: "POST", body: "{}" }),
     onSuccess: async () => {
-      queryClient.setQueryData(["state"], { task: null, reflection: { count: 0, latest: null } });
+      queryClient.setQueryData(["state"], {
+        task: null,
+        reflection: { count: 0, latest: null },
+        memory: { count: 0, latest: null },
+      });
       await queryClient.invalidateQueries({ queryKey: ["me"] });
       setScreen("signin");
+    },
+  });
+
+  const memoryMutation = useMutation({
+    mutationFn: (text: string) =>
+      api<{ memory: MemoryState["latest"]; memoryState: MemoryState }>("/api/memories", {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData<AppState | undefined>(["state"], (current) => ({
+        reflection: current?.reflection ?? { count: 0, latest: null },
+        task: current?.task ?? null,
+        memory: data.memoryState,
+      }));
+      setDumpText("");
     },
   });
 
@@ -252,9 +283,9 @@ export function App() {
     onSuccess: (data) => {
       queryClient.setQueryData<AppState | undefined>(["state"], (current) => ({
         reflection: current?.reflection ?? { count: 0, latest: null },
+        memory: current?.memory ?? { count: 0, latest: null },
         task: data.task,
       }));
-      setDumpText("");
       setScreen("focus");
     },
   });
@@ -310,6 +341,19 @@ export function App() {
   });
 
   const currentAgent: Screen = task && screen === "focus" ? "focus" : screen;
+  const handleScreen = (nextScreen: Screen) => {
+    if (nextScreen === "focus") {
+      setScreen("focus");
+
+      if (!task && memory.latest?.content && !triageMutation.isPending) {
+        triageMutation.mutate(memory.latest.content);
+      }
+
+      return;
+    }
+
+    setScreen(nextScreen);
+  };
   const enterFlow = () => {
     if (window.location.pathname !== "/app") {
       window.history.pushState(null, "", "/app");
@@ -353,13 +397,14 @@ export function App() {
           {user && screen === "capture" ? (
             <CapturePanel
               dumpText={dumpText}
-              error={triageMutation.error?.message}
-              loading={triageMutation.isPending}
+              error={memoryMutation.error?.message}
               line={supportLine}
+              loading={memoryMutation.isPending}
+              memory={memory}
               model={configQuery.data?.model ?? "gemini-3.5-flash"}
               user={user}
               onChange={setDumpText}
-              onSubmit={() => triageMutation.mutate(dumpText)}
+              onSubmit={() => memoryMutation.mutate(dumpText)}
               onLogout={() => logoutMutation.mutate()}
             />
           ) : null}
@@ -372,6 +417,21 @@ export function App() {
               onNewDump={() => setScreen("capture")}
               onToggleStep={(stepId, done) => toggleStepMutation.mutate({ stepId, done })}
               onLogout={() => logoutMutation.mutate()}
+            />
+          ) : null}
+
+          {user && screen === "focus" && !task ? (
+            <FlowStartPanel
+              error={triageMutation.error?.message}
+              loading={triageMutation.isPending}
+              memory={memory}
+              onBack={() => setScreen("capture")}
+              onStart={() => {
+                if (memory.latest?.content) {
+                  triageMutation.mutate(memory.latest.content);
+                }
+              }}
+              user={user}
             />
           ) : null}
 
@@ -413,9 +473,7 @@ export function App() {
           }
         }}
       />
-      {user && screen !== "landing" ? (
-        <BottomNav screen={screen} task={task} onScreen={setScreen} />
-      ) : null}
+      {user && screen !== "landing" ? <BottomNav screen={screen} onScreen={handleScreen} /> : null}
     </div>
   );
 }
@@ -648,6 +706,7 @@ function CapturePanel({
   error,
   line,
   loading,
+  memory,
   model,
   onChange,
   onLogout,
@@ -658,6 +717,7 @@ function CapturePanel({
   error: string | undefined;
   line: string;
   loading: boolean;
+  memory: MemoryState;
   model: string;
   onChange: (value: string) => void;
   onLogout: () => void;
@@ -690,13 +750,13 @@ function CapturePanel({
         <div className="pointer-events-none absolute -right-24 -top-20 size-72 rounded-full bg-indigo-soft/20 blur-3xl" />
         <div className="relative">
           <p className="font-bold text-indigo-soft text-[0.68rem] uppercase tracking-[0.18em] md:text-xs md:tracking-[0.22em]">
-            Record and translate
+            Scatter
           </p>
           <h3 className="mt-3 font-serif text-3xl text-starlight leading-tight md:mt-6 md:text-5xl">
             What's on your mind?
           </h3>
           <p className="mt-2 text-mist text-sm leading-6 md:mt-4 md:text-base md:leading-7">
-            {line}
+            {line} Save the thought here. Flow will turn it into action when you are ready.
           </p>
         </div>
       </div>
@@ -707,7 +767,12 @@ function CapturePanel({
           { icon: Compass, text: "I forgot to reply to someone.", meta: "Life admin" },
           { icon: Bot, text: "I feel overwhelmed.", meta: "Emotional spark" },
         ].map((spark) => (
-          <div className="glass flex items-center gap-4 rounded-[2rem] p-4" key={spark.text}>
+          <button
+            type="button"
+            className="glass flex items-center gap-4 rounded-[2rem] p-4 text-left transition hover:border-indigo-soft/40"
+            key={spark.text}
+            onClick={() => onChange(spark.text)}
+          >
             <div className="grid size-14 place-items-center rounded-full bg-indigo-soft/20 text-indigo-soft">
               <spark.icon size={22} />
             </div>
@@ -716,7 +781,7 @@ function CapturePanel({
               <p className="mt-1 text-dim text-sm">{spark.meta}</p>
             </div>
             <MoreVertical className="text-dim" size={18} />
-          </div>
+          </button>
         ))}
       </div>
 
@@ -748,8 +813,97 @@ function CapturePanel({
           onClick={onSubmit}
         >
           <Zap size={20} />
-          {loading ? "Sorting the noise..." : "Capture Spark"}
+          {loading ? "Saving..." : "Save to memory"}
         </button>
+        {memory.latest ? (
+          <p className="mt-3 text-center text-dim text-sm">
+            {memory.count} thought{memory.count === 1 ? "" : "s"} remembered. Open Flow to triage
+            the latest one.
+          </p>
+        ) : null}
+        {error ? <p className="mt-4 text-red-200 text-sm">{error}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function FlowStartPanel({
+  error,
+  loading,
+  memory,
+  onBack,
+  onStart,
+  user,
+}: {
+  error: string | undefined;
+  loading: boolean;
+  memory: MemoryState;
+  onBack: () => void;
+  onStart: () => void;
+  user: User;
+}) {
+  return (
+    <div className="mx-auto max-w-[430px] md:max-w-[760px]">
+      <div className="glass rounded-[2rem] p-5 md:p-8">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="grid size-10 place-items-center rounded-full bg-indigo-soft/20 text-indigo-soft">
+              <Stars size={18} />
+            </div>
+            <div>
+              <p className="font-bold">Flow</p>
+              <p className="text-dim text-xs">flow triage</p>
+            </div>
+          </div>
+          <span className="rounded-full border border-white/10 px-3 py-1.5 text-dim text-xs">
+            {user.isDemo ? "Demo" : "Account"}
+          </span>
+        </div>
+        <p className="mt-7 font-bold text-indigo-soft text-sm uppercase tracking-[0.18em]">Flow</p>
+        <h3 className="mt-3 font-serif text-4xl text-starlight leading-tight md:text-5xl">
+          Choose one saved thought.
+        </h3>
+        <p className="mt-4 text-mist leading-7">
+          Flow uses Gemini to turn the latest Scatter memory into one main focus and ordered tiny
+          steps.
+        </p>
+
+        {memory.latest ? (
+          <div className="mt-6 rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
+            <p className="font-bold text-dim text-xs uppercase tracking-[0.14em]">
+              Latest scatter memory
+            </p>
+            <p className="mt-2 text-starlight leading-6">{memory.latest.content}</p>
+            <p className="mt-3 text-dim text-sm">
+              {memory.count} thought{memory.count === 1 ? "" : "s"} remembered
+            </p>
+          </div>
+        ) : (
+          <div className="mt-6 rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
+            <p className="text-mist leading-6">
+              No Scatter memory yet. Save one thought first, then come back to Flow.
+            </p>
+          </div>
+        )}
+
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <button
+            type="button"
+            className="button-glow inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-indigo-deep to-indigo-soft px-6 py-3 font-bold text-indigo-deep disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!memory.latest || loading}
+            onClick={onStart}
+          >
+            <Zap size={18} />
+            {loading ? "Finding your flow..." : "Triage latest memory"}
+          </button>
+          <button
+            type="button"
+            className="rounded-full border border-white/10 px-6 py-3 font-bold text-mist"
+            onClick={onBack}
+          >
+            Back to Scatter
+          </button>
+        </div>
         {error ? <p className="mt-4 text-red-200 text-sm">{error}</p> : null}
       </div>
     </div>
@@ -1032,18 +1186,10 @@ function ReflectionPrompt({
   );
 }
 
-function BottomNav({
-  onScreen,
-  screen,
-  task,
-}: {
-  onScreen: (screen: Screen) => void;
-  screen: Screen;
-  task: FocusTask | null;
-}) {
+function BottomNav({ onScreen, screen }: { onScreen: (screen: Screen) => void; screen: Screen }) {
   const items: Array<{ screen: Screen; label: string; icon: ReactNode; disabled?: boolean }> = [
     { screen: "capture", label: "Scatter", icon: <Sparkles size={19} /> },
-    { screen: "focus", label: "Flow", icon: <CheckCircle2 size={19} />, disabled: !task },
+    { screen: "focus", label: "Flow", icon: <CheckCircle2 size={19} /> },
     { screen: "reflect", label: "Reflect", icon: <Moon size={19} /> },
   ];
 
@@ -1175,6 +1321,7 @@ function AgentDrawer({
       if (data.task) {
         queryClient.setQueryData<AppState | undefined>(["state"], (current) => ({
           reflection: current?.reflection ?? { count: 0, latest: null },
+          memory: current?.memory ?? { count: 0, latest: null },
           task: data.task ?? null,
         }));
       }

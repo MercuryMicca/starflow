@@ -359,6 +359,7 @@ function clearSessionCookie(c: Context): void {
 }
 
 const staticRoot = new URL("../dist/client/", import.meta.url);
+const staticRootPath = decodeURIComponent(staticRoot.pathname).replace(/\/?$/, "/");
 
 const contentTypes = new Map<string, string>([
   [".css", "text/css; charset=utf-8"],
@@ -385,12 +386,18 @@ async function serveFrontend(pathname: string): Promise<Response> {
     return Response.json({ error: "Invalid path." }, { status: 400 });
   }
 
-  if (safePathname.includes("..")) {
+  if (safePathname.includes("..") || safePathname.includes("%2e")) {
     return Response.json({ error: "Invalid path." }, { status: 400 });
   }
 
   const assetPath = safePathname === "/" ? "/index.html" : safePathname;
-  const assetFile = Bun.file(new URL(`.${assetPath}`, staticRoot));
+  const assetUrl = new URL(`.${assetPath}`, staticRoot);
+  const assetFile = Bun.file(assetUrl);
+  const assetFileName = assetFile.name ?? "";
+
+  if (!assetFileName.startsWith(staticRootPath)) {
+    return Response.json({ error: "Invalid path." }, { status: 400 });
+  }
 
   if (await assetFile.exists()) {
     return new Response(assetFile, {
@@ -559,8 +566,16 @@ function parseModelJson<T>(text: string | undefined): T {
 }
 
 function modelResponseText(response: {
-  text?: string;
-  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  text?: string | undefined;
+  candidates?:
+    | Array<{
+        content?:
+          | {
+              parts?: Array<{ text?: string | undefined }> | undefined;
+            }
+          | undefined;
+      }>
+    | undefined;
 }): string | undefined {
   const directText = response.text?.trim();
 
@@ -705,6 +720,30 @@ async function loadReflectionState(userId: string) {
           id: latest.id,
           summary: latest.summary,
           carryForward: latest.carryForward,
+          createdAt: latest.createdAt.toISOString(),
+        }
+      : null,
+  };
+}
+
+async function loadMemoryState(userId: string) {
+  const [total] = await db
+    .select({ value: count() })
+    .from(agentMemories)
+    .where(eq(agentMemories.userId, userId));
+  const [latest] = await db
+    .select()
+    .from(agentMemories)
+    .where(eq(agentMemories.userId, userId))
+    .orderBy(desc(agentMemories.createdAt))
+    .limit(1);
+
+  return {
+    count: total?.value ?? 0,
+    latest: latest
+      ? {
+          id: latest.id,
+          content: latest.content,
           createdAt: latest.createdAt.toISOString(),
         }
       : null,
@@ -1169,6 +1208,15 @@ async function executeAgentTool({
 
 const app = new Hono();
 
+app.onError((error, c) => {
+  if (error instanceof SyntaxError) {
+    return c.json({ error: "Malformed JSON body." }, 400);
+  }
+
+  logServerError("Unhandled request error.", error);
+  return c.json({ error: "Unexpected server error." }, 500);
+});
+
 app.get("/healthz", (c) => {
   const config = geminiConfig();
   const geminiConfigured = configHasUsableCredentials(config);
@@ -1355,6 +1403,50 @@ app.post("/api/triage", async (c) => {
   }
 });
 
+app.post("/api/memories", async (c) => {
+  const user = await requireUser(c);
+
+  if (!user) {
+    return c.json({ error: "Sign in before saving a scatter memory." }, 401);
+  }
+
+  const body = await c.req.json<{ text?: unknown }>();
+
+  if (typeof body.text !== "string" || body.text.trim().length === 0) {
+    return c.json({ error: "Scatter text is required." }, 400);
+  }
+
+  const text = body.text.trim();
+
+  if (text.length > MAX_PROMPT_LENGTH) {
+    return c.json({ error: `Scatter text must be ${MAX_PROMPT_LENGTH} characters or fewer.` }, 400);
+  }
+
+  const [memory] = await db
+    .insert(agentMemories)
+    .values({
+      userId: user.id,
+      sourceKind: "manual",
+      content: text,
+      metadata: { surface: "scatter" },
+    })
+    .returning();
+
+  if (!memory) {
+    throw new Error("Memory insert did not return a row.");
+  }
+
+  const memoryState = await loadMemoryState(user.id);
+  return c.json({
+    memory: {
+      id: memory.id,
+      content: memory.content,
+      createdAt: memory.createdAt.toISOString(),
+    },
+    memoryState,
+  });
+});
+
 app.get("/api/state", async (c) => {
   const user = await requireUser(c);
 
@@ -1362,11 +1454,12 @@ app.get("/api/state", async (c) => {
     return c.json({ error: "Sign in before loading Starflow state." }, 401);
   }
 
-  const [task, reflection] = await Promise.all([
+  const [task, reflection, memory] = await Promise.all([
     loadOpenTask(user.id),
     loadReflectionState(user.id),
+    loadMemoryState(user.id),
   ]);
-  return c.json({ task, reflection });
+  return c.json({ task, reflection, memory });
 });
 
 app.post("/api/reflect", async (c) => {
