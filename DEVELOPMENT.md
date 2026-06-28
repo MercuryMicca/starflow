@@ -134,6 +134,7 @@ Run the narrowest relevant checks while iterating:
 ```bash
 bun run typecheck
 bun run lint
+bun run test:e2e
 ```
 
 Before opening or updating a PR, run:
@@ -143,6 +144,10 @@ bun run build
 ```
 
 `bun run build` runs `tsc --noEmit` and `vite build`.
+`bun run test:e2e` runs the Playwright browser suite against a Vite dev server with mocked API
+responses, so it does not require local Postgres or Gemini credentials.
+On a fresh local machine, install the Chromium browser once with
+`bunx playwright install chromium`; CI installs the browser during the Playwright job.
 
 ## Google Cloud Bootstrap
 
