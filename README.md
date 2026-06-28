@@ -1,12 +1,15 @@
 # Starflow
 
-Mobile-first ADHD support app with a server-side Gemini integration. Starflow helps users capture scattered thoughts, choose one next step, and reflect without turning the browser into a credential surface.
+Starflow is a mobile-first ADHD support app that turns scattered thoughts into one doable next step. It gives users a fast capture surface, asks Gemini to triage the dump, and keeps a scoped page agent available to shrink, rewrite, or adjust the current plan without exposing model credentials to the browser.
 
-Product and engineering decisions are tracked in:
+## What It Does
 
-- `docs/product-decisions.md`
-- `docs/engineering-decisions.md`
-- `docs/starflow-mvp-plan.md`
+- Capture messy thoughts as text, voice-dictated text, or a photo.
+- Triage a capture into one main quest, a reason it matters, and tiny steps.
+- Keep the current focus task in a shared Postgres-backed task store.
+- Let the page chat make explicit allowed UI mutations, such as rewriting capture text or shrinking a focus step.
+- Support demo sign-in and identity-only Google sign-in.
+- Run Gemini server-side through either Gemini Enterprise Agent Platform or the Gemini Developer API.
 
 ## Stack
 
@@ -14,11 +17,12 @@ Product and engineering decisions are tracked in:
 - Vite + React frontend.
 - Tailwind CSS v4 styling.
 - TanStack Query for frontend server state.
+- Drizzle + Postgres 16 with `pgvector`.
 - Google GenAI SDK (`@google/genai`) for Gemini.
-- Static Starflow frontend served by the same process.
+- Static frontend served by the same Bun process in production.
 - Cloud Run container contract: listens on `0.0.0.0` and `PORT`.
 
-## Local Setup
+## Quickstart
 
 Install dependencies from the committed lockfile:
 
@@ -32,153 +36,37 @@ Create local environment variables:
 cp .env.example .env
 ```
 
-For the fastest local demo, set `GEMINI_API_KEY` from Google AI Studio.
+For the fastest local demo, set `GEMINI_API_KEY` in `.env` from Google AI Studio.
 
-If you received Google hackathon / Agent Platform variables, put them in `.env`:
-
-```bash
-GOOGLE_AGENT_PLATFORM_KEY=your-agent-platform-key
-GOOGLE_CLOUD_PROJECT=your-project-id
-GEMINI_PROJECT_NUMBER=your-project-number
-GEMINI_API_KEY=your-gemini-api-key
-```
-
-When `GOOGLE_AGENT_PLATFORM_KEY` is present, the app uses Gemini Enterprise Agent Platform mode. `GEMINI_API_KEY` remains useful as the local Developer API fallback if the Agent Platform key is removed.
-
-For Google Cloud mode with Application Default Credentials or a Cloud Run service account, omit `GOOGLE_AGENT_PLATFORM_KEY`, authenticate with ADC, and set:
-
-```bash
-GOOGLE_GENAI_USE_ENTERPRISE=true
-GOOGLE_CLOUD_PROJECT=your-project-id
-GOOGLE_CLOUD_LOCATION=global
-```
-
-Run the API and Vite frontend separately for low-level debugging:
-
-```bash
-bun run dev:api
-bun run dev
-```
-
-For normal local development, prefer the integrated script:
+Start local Postgres, apply migrations, and run the Bun API plus Vite frontend:
 
 ```bash
 bun run dev:local
 ```
 
-In Conductor, this uses the allocated 10-port block: Vite on the browser-safe app port, Bun/Hono API on the next port, and Postgres on another port in the block.
+In Conductor, `dev:local` uses the allocated 10-port block: Vite on the browser-safe app port, Bun/Hono API on the next port, and Postgres on another port in the block.
 
-## Local Postgres
-
-For agent context storage, local development uses Postgres 16 with `pgvector` in Docker:
-
-```bash
-bun run db:up
-bun run db:migrate
-```
-
-Or start Postgres, apply migrations, and run the full local stack in one command:
-
-```bash
-bun run dev:local
-```
-
-`dev:local` uses the Conductor-allocated port block when available and stops the local Postgres service when you press Ctrl-C.
-
-The local scripts derive a worktree-specific Postgres port, so parallel Conductor workspaces do not all bind to `5432`. To inspect the generated values:
+To inspect the derived local values:
 
 ```bash
 ./scripts/local-env.sh env
 ```
 
-The schema covers users, Google OAuth accounts, agent sessions/messages, memories, `vector(768)` memory embeddings, brain dumps, focus tasks, and task steps. Drizzle schema lives in `src/db/schema.ts`; bootstrap SQL migrations live in `db/migrations/`.
-
-## MVP API
-
-- `POST /api/auth/demo` signs in as the local demo user.
-- `POST /api/auth/google` verifies a Google Identity Services ID token when `GOOGLE_OAUTH_CLIENT_ID` is configured.
-- `GET /api/me` returns the signed-in user.
-- `GET /api/state` returns the latest open focus task.
-- `POST /api/triage` turns a brain dump into one main quest and tiny steps.
-- `PATCH /api/steps/:id` toggles a tiny step.
-- `POST /api/chat` runs the role-specific page agent for landing, sign-in, capture, or focus.
-- `POST /api/events` routes voice/image/text, task-edited, and task-completed events through the Sense -> Classifier -> Triage -> Coach -> Breakdown orchestrator contract.
-
-## Google Cloud Bootstrap
-
-For Cloud Run with Gemini Enterprise Agent Platform:
-
-1. Create or select a Google Cloud project.
-2. Enable billing.
-3. Enable the Agent Platform / Vertex AI API.
-4. Grant the Cloud Run service account permission to call Gemini, such as `roles/aiplatform.user`.
-5. Deploy with either the Agent Platform key or service account variables below.
-
-Agent Platform key runtime variables:
+## Useful Commands
 
 ```bash
-GOOGLE_AGENT_PLATFORM_KEY=your-agent-platform-key
-GOOGLE_CLOUD_PROJECT=your-project-id
-GEMINI_PROJECT_NUMBER=your-project-number
-GEMINI_MODEL=gemini-3.5-flash
+bun run dev:local      # full local stack
+bun run dev:api        # API only
+bun run dev            # Vite frontend only
+bun run db:migrate     # local Postgres migrations
+bun run typecheck      # TypeScript check
+bun run lint           # Biome check
+bun run build          # production build
 ```
 
-Service account / ADC runtime variables:
+## Project Docs
 
-```bash
-GOOGLE_GENAI_USE_ENTERPRISE=true
-GOOGLE_CLOUD_PROJECT=your-project-id
-GOOGLE_CLOUD_LOCATION=global
-GEMINI_MODEL=gemini-3.5-flash
-```
-
-## Deploy
-
-The examples below use `--allow-unauthenticated` for fast public hackathon demos. The app still requires Starflow session auth before model calls. For production, remove that flag and put additional rate limiting, quota controls, or an application gateway in front of model-backed APIs to avoid unexpected Gemini spend or abuse.
-
-Cloud Run also needs database and session configuration. Prefer Secret Manager for `DATABASE_URL`, `SESSION_SECRET`, and any API keys:
-
-```bash
-gcloud run deploy starflow \
-  --source . \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-secrets DATABASE_URL=DATABASE_URL:latest,SESSION_SECRET=SESSION_SECRET:latest,GOOGLE_AGENT_PLATFORM_KEY=GOOGLE_AGENT_PLATFORM_KEY:latest \
-  --set-env-vars GOOGLE_CLOUD_PROJECT=your-project-id,GEMINI_PROJECT_NUMBER=your-project-number
-```
-
-Before routing demo traffic to a fresh managed database, apply migrations against the production `DATABASE_URL` from a trusted machine or CI job:
-
-```bash
-DATABASE_URL='postgresql://user:password@host:5432/database' bun run db:migrate:url
-```
-
-The local `bun run db:migrate` command starts the Docker Compose Postgres service and is intended for local development only.
-
-Build and deploy from source with Google Cloud Buildpacks:
-
-```bash
-gcloud run deploy starflow \
-  --source . \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars GOOGLE_AGENT_PLATFORM_KEY=your-agent-platform-key,GOOGLE_CLOUD_PROJECT=your-project-id,GEMINI_PROJECT_NUMBER=your-project-number,DATABASE_URL=postgresql://user:password@host:5432/database,SESSION_SECRET=replace-with-random-secret
-```
-
-Or build the included container:
-
-```bash
-gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT_ID/starflow/starflow
-gcloud run deploy starflow \
-  --image us-central1-docker.pkg.dev/PROJECT_ID/starflow/starflow \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars GOOGLE_AGENT_PLATFORM_KEY=your-agent-platform-key,GOOGLE_CLOUD_PROJECT=PROJECT_ID,GEMINI_PROJECT_NUMBER=your-project-number,DATABASE_URL=postgresql://user:password@host:5432/database,SESSION_SECRET=replace-with-random-secret
-```
-
-## Checks
-
-```bash
-bun run typecheck
-bun run lint
-```
+- [ARCHITECTURE.md](ARCHITECTURE.md) explains the runtime architecture, API surface, data model, and AI agent boundaries.
+- [DEVELOPMENT.md](DEVELOPMENT.md) covers local setup, environment variables, database commands, checks, and Cloud Run deploy notes.
+- [CONTRIBUTING.md](CONTRIBUTING.md) describes expectations for changes and pull requests.
+- `docs/product-decisions.md`, `docs/engineering-decisions.md`, and `docs/starflow-mvp-plan.md` preserve dated product and engineering rationale.
